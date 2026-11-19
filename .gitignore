@@ -1,0 +1,11 @@
+bin/
+obj/
+build/
+dist/
+__pycache__/
+*.pyc
+.pytest_cache/
+*_geom.cache
+*_cables.json
+.vs/
+*.user

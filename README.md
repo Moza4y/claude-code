@@ -1,66 +1,41 @@
-# Tasks — a clean, modern to-do list
+# Smart Route - SOLIDWORKS add-in (beta)
 
-A single-page to-do app in **one file** (`index.html`). No build step, no dependencies, no tracking.
-Your tasks are saved in your browser (`localStorage`), so they stay on your device.
+A "Smart Route" tab appears next to the Routing commands in assemblies:
 
-<p align="center">
-  <img src="docs/screenshots/light.png" alt="Light theme" width="49%">
-  <img src="docs/screenshots/dark.png" alt="Dark theme" width="49%">
-</p>
-
-## Features
-
-- Add, edit (double-click or the pencil), complete and delete tasks
-- **Priority** (Low / Medium / High) and optional **due date** with *Today*, *Tomorrow* and *Overdue* highlighting
-- **Filters** (All / Active / Done) with live counts, and **sorting** (newest, oldest, due date, priority)
-- **Progress bar** and "tasks left" counter
-- **Undo** after deleting a task or clearing completed tasks (button or `Ctrl/Cmd + Z`)
-- **Light and dark theme** — follows your system until you pick one
-- Responsive (phone, tablet, desktop), keyboard friendly (`/` focuses the input), screen-reader labels, reduced-motion support
-- Works offline; keeps several open tabs in sync
-
-## Run it locally
-
-Open `index.html` in a browser. That's it.
-
-## Deploy (about 1 minute) — GitHub Pages
-
-1. Put the files of this folder in the root of your repository (`index.html` is the one that matters) and commit to `main`.
-2. In the repository go to **Settings → Pages**.
-3. Under **Build and deployment** choose **Source: Deploy from a branch**, then **Branch: `main`** and folder **`/ (root)`**, and press **Save**.
-4. After a minute your app is live at `https://<your-username>.github.io/<repository-name>/`
-   (for this repository: `https://moza4y.github.io/claude-code/`).
-
-Every later push to `main` redeploys automatically.
-
-### Other one-step options
-
-| Host | How |
+| Button | What it does |
 |---|---|
-| **Netlify** | Drag the folder onto <https://app.netlify.com/drop> |
-| **Vercel** | `npx vercel` in the folder (or import the repo) |
-| **Cloudflare Pages** | Connect the repo, build command: *none*, output directory: `/` |
-| **Any static host / web server** | Upload `index.html` |
+| **Smart Auto Route** | Select the 2 end points of a route (in Edit Route), click. The engine plans a path around the REAL geometry (min bend radius, clearance, optional wanted length), adds the points to the route's 3D sketch and calls Routing's `CreateRouteThroughSketchEntities`. If that call fails, the points stay in the sketch so the normal Auto Route can be run through them. |
+| **Scan Routes** | Reads every route sub-assembly (features, 3D sketch segments) and writes `%APPDATA%\SmartRoute\scan.txt`. Run this first to check the reading works on your files. |
+| **Review Routes** | Re-plans each existing single-chain route with the others as rigid obstacles; lists the ones that can be shorter (>2 % and no bend problem). "Draw selected" puts the suggestion in as a 3D sketch for comparison. Nothing is changed automatically. |
+| **Accuracy** | Grid cell 20 / 10 / 5 / 2.5 / 1.5 mm or custom. Higher = slower, more exact. |
+| **Auto Watch** | ON: after the assembly changes (and 5 s of quiet) only the changed components are re-read and a review runs; you get a small list only if something better exists. |
 
-All paths are relative, so it works at a sub-path (like GitHub Pages) as well as at a domain root.
+Geometry is read once (and cached in `<assembly>_geom.cache`). New wires reuse it; only changed components are re-read; changing the accuracy re-processes the stored geometry.
 
-## Customise
+## Build (Visual Studio 2019/2022, workload ".NET desktop development")
+1. Open `SmartRoute.csproj`. If SOLIDWORKS is not in `C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS`, edit `<SWDir>` in the csproj.
+2. The project references these from `<SWDir>\api\redist\`: `SolidWorks.Interop.sldworks`, `swconst`, `swpublished`, `SWRoutingLib`.
+3. Build **Release | x64**. Output: `bin\Release\net48\SmartRoute.dll` and `auto_cable_route.py` next to it.
 
-Everything lives in `index.html`:
+## Register (once, as Administrator, SOLIDWORKS closed)
+```
+"%windir%\Microsoft.NET\Framework64\v4.0.30319\regasm.exe" /codebase "<path>\SmartRoute.dll"
+```
+Unregister with the same command plus `/u`.
 
-- **Colours / look:** edit the CSS variables at the top of the `<style>` block (`--accent`, `--surface`, `--radius`, …). The dark theme is the `[data-theme="dark"]` block.
-- **Sample tasks:** the first visit shows a few example tasks. Set `SEED_SAMPLE_TASKS = false` in the script to start empty.
-- **Title / text:** change `<title>` and the `<h1>`.
+## Engine (Python, 64-bit, in PATH)
+```
+pip install pywin32 numpy scipy
+```
+Different Python? Put its full path in `%APPDATA%\SmartRoute\settings.json` -> `"PythonExe"`.
 
-## Privacy
+## Start
+SOLIDWORKS -> Tools -> Add-Ins -> tick **Smart Route** (Routing add-in must be on too). Logs: `%APPDATA%\SmartRoute\smartroute.log`.
 
-No network requests, no analytics, no cookies. Data is stored only in your browser under the keys `tasks.v1` and `tasks.theme`.
-Clearing the site's data in your browser removes it.
+## Several SOLIDWORKS versions
+Build against the OLDEST version you use (its `api\redist`); the same DLL normally loads in newer ones. If a version complains, build once per version with `/p:SWDir="<that install>"`.
 
-## Browser support
-
-Current versions of Chrome, Edge, Firefox and Safari. (Uses CSS variables, `:focus-visible` and `color-mix()`; the last one degrades gracefully.)
-
-## License
-
-MIT — see [LICENSE](LICENSE).
+## Notes
+* Engine calls SOLIDWORKS from a separate process while SOLIDWORKS is idle, so requests are asynchronous: SOLIDWORKS stays usable while it plans; results appear in a message box.
+* Wire diameter/bend radius for Review and for existing routes use the last values you entered in the dialog (the route's own cable properties are read only when a route segment is selected).
+* Not verified on a live SOLIDWORKS session. Likely places to adjust if something misbehaves: coordinate frame of route sketches (`RoutingReader.ToAsm`), the feature type names that mark a route (see scan.txt), and the Routing status code returned by `CreateRouteThroughSketchEntities`.
