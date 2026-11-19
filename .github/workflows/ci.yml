@@ -1,0 +1,43 @@
+name: CI
+on:
+  push:
+  pull_request:
+
+jobs:
+  engine-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install numpy scipy pytest
+      - run: pytest -q tests
+
+  addin-compile-check:
+    # SOLIDWORKS interop DLLs cannot be on GitHub, so this compiles against tiny stubs (tools/ci/stubs.cs):
+    # it catches syntax/logic errors only. The real build + release is done locally with tools/release.ps1.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y mono-mcs libmono-system-web-extensions4.0-cil libmono-system-windows-forms4.0-cil
+      - run: >
+          mcs -target:library -langversion:7 -out:/tmp/SmartRoute.dll
+          -r:System.Windows.Forms.dll -r:System.Drawing.dll -r:System.Web.Extensions.dll
+          -r:Microsoft.CSharp.dll -r:System.Core.dll tools/ci/stubs.cs src/SmartRoute/*.cs
+
+  engine-exe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install -r src/engine/requirements.txt pyinstaller
+      - run: >
+          python -m PyInstaller --noconfirm --name SmartRouteEngine --onedir --console
+          --hidden-import win32com.client --hidden-import pythoncom --hidden-import pywintypes
+          src/engine/auto_cable_route.py
+      - run: dist/SmartRouteEngine/SmartRouteEngine.exe --version
+      - uses: actions/upload-artifact@v4
+        with: { name: engine-exe, path: dist/SmartRouteEngine }

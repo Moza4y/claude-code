@@ -25,6 +25,7 @@ namespace SmartRoute
 
         public string PythonExe = "python";
         public string ScriptPath = "";
+        public string ExePath = "";          // packaged engine (preferred); Python + script is the fallback
 
         public bool Running { get { return proc != null && !proc.HasExited; } }
 
@@ -32,16 +33,20 @@ namespace SmartRoute
         public string Start()
         {
             if (Running) return null;
-            if (!File.Exists(ScriptPath)) return "Engine script not found: " + ScriptPath;
-            var psi = new ProcessStartInfo(PythonExe, "\"" + ScriptPath + "\" --server")
+            ProcessStartInfo psi;
+            if (!string.IsNullOrEmpty(ExePath) && File.Exists(ExePath))
+                psi = new ProcessStartInfo(ExePath, "--server");
+            else
             {
-                UseShellExecute = false,
-                RedirectStandardInput = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true,
-                StandardOutputEncoding = Encoding.UTF8
-            };
+                if (!File.Exists(ScriptPath)) return "Engine not found: " + ExePath + " / " + ScriptPath;
+                psi = new ProcessStartInfo(PythonExe, "\"" + ScriptPath + "\" --server");
+            }
+            psi.UseShellExecute = false;
+            psi.RedirectStandardInput = true;
+            psi.RedirectStandardOutput = true;
+            psi.RedirectStandardError = true;
+            psi.CreateNoWindow = true;
+            psi.StandardOutputEncoding = Encoding.UTF8;
             try { proc = Process.Start(psi); }
             catch (Exception e) { return e.Message; }
 

@@ -24,10 +24,16 @@ import sys, math, heapq, json, os, time, random, pickle
 from collections import OrderedDict
 import numpy as np
 
+ENGINE_VERSION = "0.3.0"
+
 try:
     from scipy.ndimage import distance_transform_edt as _edt
 except Exception:  # works without scipy, but clearance is a bit more conservative
     _edt = None
+try:
+    from scipy.spatial import cKDTree as _KD
+except Exception:
+    _KD = None
 
 DIRS = [(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)]
 PREFIX = "AutoCable_"
@@ -419,7 +425,7 @@ def corners_only(pts):
     return out
 
 
-def fillet(pts, R, nseg=8):
+def fillet(pts, R, nseg=None):
     """Round every corner with radius R -> (polyline, problems[(corner, eff_radius)])."""
     poly, problems = [pts[0]], []
     last = len(pts) - 1
@@ -442,8 +448,9 @@ def fillet(pts, R, nseg=8):
         c = add(v, mul(unit(add(u1, u2)), reff / math.sin(phi / 2)))
         r1, r2 = sub(t1, c), sub(t2, c)
         theta = math.pi - phi
-        for k in range(nseg + 1):
-            s = k / nseg
+        ns = nseg or max(4, int(math.ceil(math.degrees(theta) / 5.0)))   # one sample per ~5 degrees
+        for k in range(ns + 1):
+            s = k / ns
             w1 = math.sin((1 - s) * theta) / math.sin(theta)
             w2 = math.sin(s * theta) / math.sin(theta)
             poly.append(add(c, add(mul(r1, w1), mul(r2, w2))))
@@ -619,6 +626,32 @@ def _grid(spec, rigid, clr, ms, lo, hi, h, cell):
     return dict(blocked=blocked, lo=lo, h=h, n=n, sel=sel, box_parts=box_parts, rho=rho)
 
 
+def _seg_free(blocked, a, b):
+    d = (b[0] - a[0], b[1] - a[1], b[2] - a[2])
+    steps = max(abs(d[0]), abs(d[1]), abs(d[2])) * 2 + 1
+    t = np.linspace(0.0, 1.0, steps + 1)
+    idx = np.rint(np.stack([a[i] + d[i] * t for i in range(3)], 1)).astype(np.int64)
+    if (idx < 0).any() or (idx >= np.array(blocked.shape)).any():
+        return False
+    return not blocked[idx[:, 0], idx[:, 1], idx[:, 2]].any()
+
+
+def pull_path(blocked, cells):
+    """String pulling: drop grid corners that are not needed (free-angle, shorter path)."""
+    n = len(cells)
+    if n < 3:
+        return list(cells)
+    out, i = [cells[0]], 0
+    while i < n - 1:
+        j, k = i + 1, i + 2
+        while k < n and _seg_free(blocked, cells[i], cells[k]):
+            j = k
+            k += 1
+        out.append(cells[j])
+        i = j
+    return out
+
+
 def _route(G, spec, corridor=None):
     """A* on a prepared grid -> dict(pts, poly, problems) (pts = corner points before rounding)."""
     p0, p1, R = spec["p0"], spec["p1"], spec["dia"] * spec["k"]
@@ -632,22 +665,26 @@ def _route(G, spec, corridor=None):
     goals = {c: v[0] for c, v in goals_raw.items()}
     gcell = to_cell(p1, lo, h, n)
     blk = blocked if corridor is None else (blocked | ~corridor)
-    best = None
+    best = {"ortho": None, "smooth": None}
     for tc in (4.0, 20.0):
         path = astar_multi(blk, starts, goals, gcell, kmax + 3, tc, ST["nodes"])
         if not path:
             break
-        cen = [(lo[0] + c[0] * h, lo[1] + c[1] * h, lo[2] + c[2] * h) for c in path]
-        pts = corners_only([tuple(p0)] + cen + [tuple(p1)])
-        poly, problems = fillet(pts, R)
-        cand = (len(problems), poly_length(poly))
-        if best is None or cand < best[0]:
-            best = (cand, pts, poly, problems)
-        if not problems:
+        for name, cl in (("ortho", path), ("smooth", pull_path(blocked, path))):
+            cen = [(lo[0] + c[0] * h, lo[1] + c[1] * h, lo[2] + c[2] * h) for c in cl]
+            pts = corners_only([tuple(p0)] + cen + [tuple(p1)])
+            poly, problems = fillet(pts, R)
+            cand = (len(problems), poly_length(poly))
+            if best[name] is None or cand < best[name][0]:
+                best[name] = (cand, pts, poly, problems)
+        if all(v is not None and v[0][0] == 0 for v in best.values()):
             break
-    if best is None:
+    variants = {k: v for k, v in best.items() if v is not None}
+    if not variants:
         return None
-    return dict(pts=best[1], poly=best[2], problems=best[3])
+    top = min(variants.values(), key=lambda v: v[0])
+    return dict(pts=top[1], poly=top[2], problems=top[3],
+                variants={k: dict(pts=v[1], poly=v[2], problems=v[3]) for k, v in variants.items()})
 
 
 def _plan(spec, rigid, clr, factor, ms, seen):
@@ -673,6 +710,7 @@ def _plan(spec, rigid, clr, factor, ms, seen):
     notes = []
     rlo, rhi, hc, coarse_mode = list(lo), list(hi), None, False
 
+    slack_grid = None
     if cells <= COARSE_TRIGGER:                      # small region: one fine pass
         G = _grid(spec, rigid, clr, ms, lo, hi, h, cell)
         rf = _route(G, spec)
@@ -711,34 +749,45 @@ def _plan(spec, rigid, clr, factor, ms, seen):
         if rf is None:
             return None
         lo, hi, n = flo, fhi, G["n"]
-    pts, poly, problems = rf["pts"], rf["poly"], rf["problems"]
-    shortest = poly_length(poly)
-    if target is not None:
-        if target <= shortest + 5e-4:
-            if target < shortest - 5e-4:
-                notes.append("wanted %.1f mm is shorter than the shortest possible (%.1f mm) - using shortest"
-                             % (target * 1000, shortest * 1000))
-        else:
-            if coarse_mode:      # fine grid around everything a slack bump could reach
-                rs = (target - shortest) / 2 + 5 * R + 3 * hc
-                slo = [max(rlo[i], min(q[i] for q in pts) - rs) for i in range(3)]
-                shi = [min(rhi[i], max(q[i] for q in pts) + rs) for i in range(3)]
-                hs = cell
-                while True:
-                    sn = dims(slo, shi, hs)
-                    if sn[0] * sn[1] * sn[2] <= cap:
-                        break
-                    hs *= 1.1
-                Gs = _grid(spec, rigid, clr, ms, slo, shi, hs, cell)
-                slack_grid = (Gs["blocked"], Gs["lo"], Gs["h"], Gs["n"])
-            pts = add_slack(pts, R, target, slack_grid)
-            poly, problems = fillet(pts, R)
-            if abs(poly_length(poly) - target) > 1e-3:
-                notes.append("closest achievable length is %.1f mm (wanted %.1f mm)"
-                             % (poly_length(poly) * 1000, target * 1000))
-    return dict(poly=poly, pts=pts, problems=problems, length=poly_length(poly), shortest=shortest,
-                note=" | ".join(notes) if notes else None, cell_mm=G["h"] * 1000, box_parts=G["box_parts"],
-                level=ST["name"])
+    sgrid = slack_grid if target is not None else None
+
+    def finish(v, note_sink):
+        pts, poly, problems = v["pts"], v["poly"], v["problems"]
+        shortest = poly_length(poly)
+        if target is not None:
+            if target <= shortest + 5e-4:
+                if target < shortest - 5e-4:
+                    note_sink.append("wanted %.1f mm is shorter than the shortest possible (%.1f mm) - using shortest"
+                                     % (target * 1000, shortest * 1000))
+            else:
+                if coarse_mode:      # fine grid around everything a slack bump could reach
+                    rs = (target - shortest) / 2 + 5 * R + 3 * hc
+                    slo = [max(rlo[i], min(q[i] for q in pts) - rs) for i in range(3)]
+                    shi = [min(rhi[i], max(q[i] for q in pts) + rs) for i in range(3)]
+                    hs = cell
+                    while True:
+                        sn = dims(slo, shi, hs)
+                        if sn[0] * sn[1] * sn[2] <= cap:
+                            break
+                        hs *= 1.1
+                    Gs = _grid(spec, rigid, clr, ms, slo, shi, hs, cell)
+                    sg = (Gs["blocked"], Gs["lo"], Gs["h"], Gs["n"])
+                else:
+                    sg = sgrid
+                pts = add_slack(pts, R, target, sg)
+                poly, problems = fillet(pts, R)
+                if abs(poly_length(poly) - target) > 1e-3:
+                    note_sink.append("closest achievable length is %.1f mm (wanted %.1f mm)"
+                                     % (poly_length(poly) * 1000, target * 1000))
+        return dict(pts=pts, poly=poly, problems=problems, length=poly_length(poly), shortest=shortest)
+
+    default = finish(dict(pts=rf["pts"], poly=rf["poly"], problems=rf["problems"]), notes)
+    variants = {}
+    for name, v in rf["variants"].items():
+        variants[name] = finish(v, [])
+    return dict(poly=default["poly"], pts=default["pts"], problems=default["problems"], length=default["length"],
+                shortest=default["shortest"], note=" | ".join(notes) if notes else None, cell_mm=G["h"] * 1000,
+                box_parts=G["box_parts"], level=ST["name"], variants=variants)
 
 
 FAIL = {"reason": None}
@@ -760,6 +809,169 @@ def plan_wire(spec, rigid, clearance):
     except TooHeavy:
         FAIL["reason"] = "search too heavy for this accuracy level - lower the accuracy (command: acc)"
     return None
+
+
+# ---------------- verification (independent of the planning grid) ----------------
+def _cross(a, b):
+    return (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
+
+
+def bend_check(poly, r_req):
+    """Smallest bend radius along a polyline, measured at the scale of the cable (0.3 x required radius).
+    Works for sparse polylines (a sharp corner is a sharp corner) and for finely sampled arcs/splines."""
+    s = max(r_req * 0.3, 1e-3)
+    step = max(s / 4.0, 5e-4)
+    dense = _densify(poly, step)
+    m = max(1, int(round(s / step)))
+    if len(dense) < 2 * m + 1:
+        return float("inf"), []
+    A, B, C = dense[:-2 * m], dense[m:-m], dense[2 * m:]
+    ab, bc, ca = np.linalg.norm(B - A, axis=1), np.linalg.norm(C - B, axis=1), np.linalg.norm(A - C, axis=1)
+    a2 = np.linalg.norm(np.cross(B - A, C - B), axis=1)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        r = np.where(a2 > 1e-12, ab * bc * ca / (2 * a2), np.inf)
+    finite = r[np.isfinite(r)]
+    minr = float(finite.min()) if len(finite) else float("inf")
+    bad = r < r_req * 0.9
+    spots, i = [], 0
+    while i < len(bad):
+        if bad[i]:
+            j = i
+            while j + 1 < len(bad) and bad[j + 1]:
+                j += 1
+            k = i + int(np.argmin(r[i:j + 1]))
+            spots.append((tuple(float(x) for x in B[k]), float(r[k])))
+            i = j + 1
+        else:
+            i += 1
+    return minr, spots
+
+
+def _densify(poly, step):
+    out = [np.array(poly[0], dtype=np.float64)]
+    for a, b in zip(poly, poly[1:]):
+        L = norm(sub(b, a))
+        n = max(1, int(math.ceil(L / step)))
+        for k in range(1, n + 1):
+            out.append(np.array(add(a, mul(sub(b, a), k / n)), dtype=np.float64))
+    return np.array(out)
+
+
+class Verifier:
+    """Distance of a cable to the real surfaces (fine KD-tree over the mesh) and to other wires."""
+
+    def __init__(self, geo, lo, hi, rigid, step):
+        self.step, self.rigid = step, rigid
+        lo_a, hi_a = np.array(lo), np.array(hi)
+        chunks = []
+        for p in geo.parts.values():
+            if not all(p.box[i] <= hi[i] and p.box[i + 3] >= lo[i] for i in range(3)):
+                continue
+            t = np.asarray(p.tris(), dtype=np.float32)
+            tmin, tmax = t.min(1), t.max(1)
+            m = (tmax >= lo_a).all(1) & (tmin <= hi_a).all(1)
+            if m.any():
+                chunks.append(sample_surface(t[m], step))
+        self.pts = np.concatenate(chunks).astype(np.float64) if chunks else np.zeros((0, 3))
+        self.tree = _KD(self.pts) if (_KD is not None and len(self.pts)) else None
+        self.wires = []
+        for poly, d in rigid:
+            wp = _densify(poly, step)
+            self.wires.append((wp, d, _KD(wp) if _KD is not None else None))
+
+    def _nearest(self, tree, pts, dense):
+        if tree is not None:
+            return tree.query(dense)[0]
+        if not len(pts):
+            return np.full(len(dense), np.inf)
+        out = np.empty(len(dense))
+        for i in range(0, len(dense), 256):
+            d = np.linalg.norm(dense[i:i + 256, None, :] - pts[None, :, :], axis=2)
+            out[i:i + 256] = d.min(1)
+        return out
+
+    def check(self, poly, dia, k, clr):
+        R = dia * k
+        step = self.step
+        dense = _densify(poly, step)
+        d_obs = self._nearest(self.tree, self.pts, dense) if len(self.pts) else np.full(len(dense), np.inf)
+        clear = d_obs - dia / 2 - step * 0.5
+        near_end = np.minimum(np.linalg.norm(dense - np.array(poly[0]), axis=1),
+                              np.linalg.norm(dense - np.array(poly[-1]), axis=1)) < (2 * dia + 2 * step)
+        clear = np.where(near_end, np.inf, clear)
+        for wp, wd, wt in self.wires:
+            dw = self._nearest(wt, wp, dense) - (dia + wd) / 2 - step * 0.5
+            clear = np.minimum(clear, dw)
+
+        def runs(mask):
+            out, i = [], 0
+            while i < len(mask):
+                if mask[i]:
+                    j = i
+                    while j + 1 < len(mask) and mask[j + 1]:
+                        j += 1
+                    seg = clear[i:j + 1]
+                    m = i + int(np.argmin(seg))
+                    out.append(dict(at=[float(x) for x in dense[m]], dist=float(clear[m])))
+                    i = j + 1
+                else:
+                    i += 1
+            return out
+
+        collisions = runs(clear < 0)
+        tight = runs((clear >= 0) & (clear < clr))
+        minr, bends = bend_check(poly, R)
+        finite = clear[np.isfinite(clear)]
+        return dict(length=poly_length([tuple(p) for p in poly]),
+                    min_radius=None if minr == float("inf") else float(minr), radius_required=R,
+                    bend_violations=[dict(at=list(b), radius=float(r)) for b, r in bends],
+                    min_clearance=float(finite.min()) if len(finite) else None,
+                    collisions=collisions, tight=tight)
+
+
+def _region_of(polys, pad):
+    lo = [min(q[i] for p in polys for q in p) - pad for i in range(3)]
+    hi = [max(q[i] for p in polys for q in p) + pad for i in range(3)]
+    return lo, hi
+
+
+def plan_with_alternatives(spec, rigid, clearance):
+    """Default result + up to 3 alternatives (smooth / right-angle / extra clearance), each verified."""
+    main = plan_wire(spec, rigid, clearance)
+    if main is None:
+        return None
+    dia, k = spec["dia"], spec["k"]
+    alts = []
+    v = main["variants"]
+    if "smooth" in v:
+        alts.append(("Shortest (free angles)", "flexible", v["smooth"]))
+    if "ortho" in v:
+        alts.append(("Neat (right angles)", "orthogonal", v["ortho"]))
+    ex = plan_wire(spec, rigid, clearance * 2 + dia)
+    if ex and "smooth" in ex["variants"]:
+        alts.append(("Extra clearance", "flexible", ex["variants"]["smooth"]))
+    uniq = []
+    for lab, mode, a in alts:       # drop near-identical alternatives
+        if any(abs(a["length"] - u[2]["length"]) < 0.002 * max(a["length"], 1e-9) and len(a["pts"]) == len(u[2]["pts"])
+               for u in uniq):
+            continue
+        uniq.append((lab, mode, a))
+    polys = [a["poly"] for _, _, a in uniq] + [r for r, _ in rigid]
+    lo, hi = _region_of(polys, 0.1 + 4 * dia)
+    ver = Verifier(spec["geo"], lo, hi, rigid, max(0.5e-3, dia / 4))
+    out = []
+    for lab, mode, a in uniq:
+        chk = ver.check(a["poly"], dia, k, clearance)
+        out.append(dict(label=lab, mode=mode, pts=[list(p) for p in a["pts"]], poly=[list(p) for p in a["poly"]],
+                        length=a["length"], problems=[dict(at=list(vv), radius=r) for vv, r in a["problems"]],
+                        check=chk))
+    rng = np.random.RandomState(1)
+    cloud = ver.pts[rng.choice(len(ver.pts), min(len(ver.pts), 4000), replace=False)] if len(ver.pts) else np.zeros((0, 3))
+    boxes = [list(p.box) for p in spec["geo"].parts.values()
+             if all(p.box[i] <= hi[i] and p.box[i + 3] >= lo[i] for i in range(3))][:400]
+    scene = dict(cloud=[[round(float(x), 4) for x in q] for q in cloud], boxes=boxes,
+                 rigid=[[list(q) for q in r] for r, _ in rigid])
+    return dict(main=main, alternatives=out, scene=scene)
 
 
 # ---------------- better order for all wires ----------------
@@ -1167,7 +1379,7 @@ class Server:
     def handle(self, req):
         cmd = req.get("cmd")
         if cmd in ("ping", "shutdown"):
-            return dict(ok=True)
+            return dict(ok=True, version=ENGINE_VERSION)
         if "clearance_mm" in req:
             self.clr = float(req["clearance_mm"]) / 1000.0
         if cmd in ("init", "accuracy") and ("level" in req or "custom_mm" in req):
@@ -1186,7 +1398,20 @@ class Server:
         rigid = [([tuple(p) for p in r["poly"]], float(r["dia"])) for r in req.get("rigid", [])]
         if cmd == "plan":
             self.sync()
-            return _res_json(plan_wire(self.spec(req), rigid, self.clr))
+            r = plan_with_alternatives(self.spec(req), rigid, self.clr)
+            if r is None:
+                return dict(ok=False, error=FAIL["reason"])
+            out = _res_json(r["main"])
+            out["alternatives"] = r["alternatives"]
+            out["scene"] = r["scene"]
+            return out
+        if cmd == "verify":
+            self.sync()
+            poly = [tuple(p) for p in req["poly"]]
+            dia, k = float(req["dia"]), float(req["k"])
+            lo, hi = _region_of([poly] + [r for r, _ in rigid], 0.1 + 4 * dia)
+            ver = Verifier(self.geo, lo, hi, rigid, max(0.5e-3, dia / 4))
+            return dict(ok=True, check=ver.check(poly, dia, k, self.clr))
         if cmd == "review":
             self.sync()
             routes, out = req.get("routes", []), []
@@ -1233,7 +1458,9 @@ def serve(stdin=None, stdout=None):
 
 
 if __name__ == "__main__":
-    if "--server" in sys.argv:
+    if "--version" in sys.argv:
+        print(ENGINE_VERSION)
+    elif "--server" in sys.argv:
         serve()
     else:
         main()

@@ -1,0 +1,8 @@
+Smart Route is installed.
+
+1. Start SOLIDWORKS.
+2. Tools > Add-Ins > tick "Smart Route" (and make sure "SOLIDWORKS Routing" is ticked too).
+3. Open an assembly: the "Smart Route" tab appears next to the Routing commands.
+
+The add-in loads at every start from now on, and checks GitHub for new versions
+(Smart Route > Updates). Updates install automatically when you close SOLIDWORKS.

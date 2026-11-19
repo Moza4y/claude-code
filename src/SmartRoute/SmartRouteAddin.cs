@@ -45,7 +45,15 @@ namespace SmartRoute
         {
             public object Model, Comp0, Comp1, Sk0, Sk1;
             public string Name;
+            public double[] P0, P1;
+            public double DiaMm, BendMm;
         }
+
+        // update check state (set from a worker thread, handled on the UI thread in OnTick)
+        volatile bool updateReady, updateMsgReady, checkingUpdates, startupChecked, updateManual;
+        Updater.Info pendingUpdate;
+        string updateError, updateMsg;
+        readonly DateTime started = DateTime.Now;
 
         // ------------------------------------------------------------ COM registration
         [ComRegisterFunction]
@@ -89,10 +97,12 @@ namespace SmartRoute
                 cfg = Settings.Load();
                 cmdMgr = swApp.GetCommandManager(cookie);
                 AddCommands();
+                string home = Path.GetDirectoryName(typeof(SmartRouteAddin).Assembly.Location);
                 engine = new EngineClient
                 {
                     PythonExe = cfg.PythonExe,
-                    ScriptPath = Path.Combine(Path.GetDirectoryName(typeof(SmartRouteAddin).Assembly.Location), "auto_cable_route.py")
+                    ScriptPath = Path.Combine(home, "auto_cable_route.py"),
+                    ExePath = Path.Combine(home, "engine", "SmartRouteEngine.exe")
                 };
                 timer = new System.Windows.Forms.Timer { Interval = 250 };
                 timer.Tick += OnTick;
@@ -127,9 +137,9 @@ namespace SmartRoute
         void AddCommands()
         {
             string iconDir = Path.Combine(Settings.Dir, "icons");
-            string[] letters = { "S", "R", "V", "A", "W" };
+            string[] letters = { "S", "R", "V", "A", "W", "U" };
             Color[] colors = { Color.FromArgb(0, 120, 215), Color.FromArgb(90, 90, 90), Color.FromArgb(16, 137, 62),
-                               Color.FromArgb(200, 120, 0), Color.FromArgb(142, 68, 173) };
+                               Color.FromArgb(200, 120, 0), Color.FromArgb(142, 68, 173), Color.FromArgb(0, 150, 160) };
             string[] strips = Icons.Strips(iconDir, letters, colors);
             string[] mains = Icons.Mains(iconDir, "S", colors[0]);
 
@@ -139,12 +149,13 @@ namespace SmartRoute
             grp.MainIconList = mains;
             int opt = (int)(swCommandItemType_e.swMenuItem | swCommandItemType_e.swToolbarItem);
 
-            var idx = new int[5];
+            var idx = new int[6];
             idx[0] = grp.AddCommandItem2("Smart Auto Route", -1, "Route around the real geometry", "Smart Auto Route", 0, "SmartAutoRoute", "EnableAsm", 1, opt);
             idx[1] = grp.AddCommandItem2("Scan Routes", -1, "Read all routes in the assembly", "Scan Routes", 1, "ScanRoutes", "EnableAsm", 2, opt);
             idx[2] = grp.AddCommandItem2("Review Routes", -1, "Suggest better routes", "Review Routes", 2, "ReviewRoutes", "EnableAsm", 3, opt);
             idx[3] = grp.AddCommandItem2("Accuracy", -1, "Speed / accuracy of the planner", "Accuracy", 3, "ChooseAccuracy", "EnableAlways", 4, opt);
             idx[4] = grp.AddCommandItem2("Auto Watch", -1, "Re-review automatically after changes", "Auto Watch", 4, "ToggleWatch", "EnableAsm", 5, opt);
+            idx[5] = grp.AddCommandItem2("Updates", -1, "Check for a newer version", "Updates", 5, "CheckUpdates", "EnableAlways", 6, opt);
             grp.HasToolbar = true;
             grp.HasMenu = true;
             grp.Activate();
@@ -296,6 +307,13 @@ namespace SmartRoute
         {
             if (engine == null) return;
             engine.Pump();
+            if (updateReady) { updateReady = false; checkingUpdates = false; HandleUpdate(); }
+            if (updateMsgReady) { updateMsgReady = false; Msg(updateMsg); }
+            if (cfg.AutoUpdate && !startupChecked && (DateTime.Now - started).TotalSeconds > 20)
+            {
+                startupChecked = true;
+                if (DateTime.UtcNow.Ticks - cfg.LastUpdateCheck > TimeSpan.FromHours(24).Ticks) UpdateCheck(true);
+            }
             if (!cfg.Watch || !engineReady || busy) return;
             try
             {
@@ -364,6 +382,7 @@ namespace SmartRoute
             var job = new Job { Model = model };
             double[] p0 = ReadSel(swApp, sm, 1, out job.Comp0, out job.Sk0);
             double[] p1 = ReadSel(swApp, sm, 2, out job.Comp1, out job.Sk1);
+            job.P0 = p0; job.P1 = p1;
 
             double mb = RoutingReader.TryReadMinBendRadius(model);
             using (var dlg = new RouteDialog("W" + DateTime.Now.ToString("HHmmss"), cfg.DiaMm,
@@ -373,6 +392,7 @@ namespace SmartRoute
                 cfg.DiaMm = dlg.DiaMm; cfg.BendMm = dlg.BendMm; cfg.ClearanceMm = dlg.ClearanceMm;
                 cfg.Save();
                 job.Name = dlg.WireName;
+                job.DiaMm = dlg.DiaMm; job.BendMm = dlg.BendMm;
 
                 // existing routes are rigid obstacles (except the one being edited)
                 var rep = new StringBuilder();
@@ -410,22 +430,24 @@ namespace SmartRoute
             try
             {
                 if (!J.Ok(r)) { Msg("No route could be planned: " + J.Err(r)); return; }
-                var pts = J.PL(J.Get(r, "pts"));
-                var sb = new StringBuilder();
-                sb.AppendLine("Planned '" + job.Name + "': " + (J.D(J.Get(r, "length")) * 1000).ToString("0.0") + " mm " +
-                              "(shortest possible " + (J.D(J.Get(r, "shortest")) * 1000).ToString("0.0") + " mm), " +
-                              J.Get(r, "level") + ", cell " + J.D(J.Get(r, "cell_mm")).ToString("0.0") + " mm.");
+                var alts = Alt.Parse(r);
+                if (alts.Count == 0) { Msg("The engine returned no alternatives."); return; }
+                var scene = J.Get(r, "scene") as Dictionary<string, object>;
+                var cloud = scene == null ? new List<double[]>() : J.PL(J.Get(scene, "cloud"));
+                var boxes = scene == null ? new List<double[]>() : J.PL(J.Get(scene, "boxes"));
+                var rigid = new List<List<double[]>>();
+                if (scene != null && J.Get(scene, "rigid") != null)
+                    foreach (object w in (System.Collections.IEnumerable)J.Get(scene, "rigid")) rigid.Add(J.PL(w));
                 string note = J.Get(r, "note") as string;
-                if (!string.IsNullOrEmpty(note)) sb.AppendLine("Note: " + note);
-                foreach (var p in J.Objs(J.Get(r, "problems")))
+                Status("Smart Route: " + alts.Count + " alternative(s) ready.");
+                using (var dlg = new PreviewForm("Smart Route - " + job.Name + " (" + J.Get(r, "level") + ", cell " +
+                                                 J.D(J.Get(r, "cell_mm")).ToString("0.0") + " mm)" +
+                                                 (string.IsNullOrEmpty(note) ? "" : "  -  " + note), alts, cloud, boxes, rigid))
                 {
-                    double[] at = J.P(J.Get(p, "at"));
-                    sb.AppendLine("PROBLEM at (" + (at[0] * 1000).ToString("0") + ", " + (at[1] * 1000).ToString("0") + ", " +
-                                  (at[2] * 1000).ToString("0") + ") mm: radius only " + (J.D(J.Get(p, "radius")) * 1000).ToString("0.0") + " mm");
+                    if (dlg.ShowDialog(Owner()) != DialogResult.OK || dlg.Chosen == null) { Status("Smart Route: cancelled, nothing was changed."); return; }
+                    string created = CreateInRouting(job, dlg.Chosen.Pts, dlg.Chosen.Mode == "flexible");
+                    VerifyAfter(job, dlg.Chosen, created);
                 }
-                sb.AppendLine();
-                sb.AppendLine(CreateInRouting(job, pts));
-                Msg(sb.ToString());
             }
             catch (Exception e) { Fail("Smart Auto Route (apply)", e); }
         }
@@ -439,11 +461,24 @@ namespace SmartRoute
             return Convert.ToInt32(o);
         }
 
+        /// <summary>Flexible (smooth curve) mode is looked up by name at run time; falls back to orthogonal.</summary>
+        static int ConversionMode(bool flexible, out bool usedFlexible)
+        {
+            Type t = typeof(swAutoRouteConversionMode_e);
+            usedFlexible = false;
+            if (flexible)
+                foreach (string n in Enum.GetNames(t))
+                    if (n.IndexOf("Flexible", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        n.IndexOf("Smooth", StringComparison.OrdinalIgnoreCase) >= 0)
+                    { usedFlexible = true; return (int)Enum.Parse(t, n); }
+            return (int)swAutoRouteConversionMode_e.swOrthogonalAutoRouteMode;
+        }
+
         /// <summary>
         /// Documented Routing flow: points in the route's 3D sketch -> IAutoRoute.CreateRouteThroughSketchEntities.
         /// If anything fails the points stay in the sketch, so the normal Auto Route can be run through them.
         /// </summary>
-        string CreateInRouting(Job job, List<double[]> pts)
+        string CreateInRouting(Job job, List<double[]> pts, bool flexible)
         {
             dynamic model = job.Model;
             var ids = new List<int>();
@@ -477,14 +512,15 @@ namespace SmartRoute
 
             try
             {
+                bool usedFlex;
+                int mode = ConversionMode(flexible, out usedFlex);
                 dynamic rm = model.GetRouteManager();
                 dynamic ar = rm.GetAutoRoute();
-                int status = (int)ar.CreateRouteThroughSketchEntities(
-                    (int)swAutoRouteConversionMode_e.swOrthogonalAutoRouteMode,
-                    (int)swAutoRouteAutoTangencyMode_e.swAutoTangencyMode_ON,
-                    types.ToArray(), ids.ToArray());
-                return "Route created through " + pts.Count + " points (Routing status code " + status +
-                       "). Check the route; Undo if it is not what you expect.";
+                int status = (int)ar.CreateRouteThroughSketchEntities(mode,
+                    (int)swAutoRouteAutoTangencyMode_e.swAutoTangencyMode_ON, types.ToArray(), ids.ToArray());
+                return "Route created through " + pts.Count + " points, " + (usedFlex ? "flexible (smooth)" : "orthogonal") +
+                       " mode" + (flexible && !usedFlex ? " (flexible mode not found in this version)" : "") +
+                       " (Routing status code " + status + "). Ctrl+Z undoes it.";
             }
             catch (Exception e)
             {
@@ -492,6 +528,166 @@ namespace SmartRoute
                 return "The " + pts.Count + " path points are now in the route's 3D sketch, but the automatic route call failed (" +
                        e.Message + "). Run the normal Auto Route through these points.";
             }
+        }
+
+        // ------------------------------------------------------------ verification after creation
+        static string Mm(double v) { return (v * 1000).ToString("0.0"); }
+
+        void VerifyAfter(Job job, Alt alt, string createMsg)
+        {
+            var sb = new StringBuilder(createMsg);
+            sb.AppendLine();
+            sb.AppendLine();
+            try
+            {
+                var rep = new StringBuilder();
+                RouteInfo mine = null;
+                var others = new List<object>();
+                foreach (var r in RoutingReader.ReadRoutes(swApp, rep))
+                {
+                    if (r.Chain.Count < 2) continue;
+                    double[] a = r.Chain[0], b = r.Chain[r.Chain.Count - 1];
+                    bool m = (D3(a, job.P0) < 0.003 && D3(b, job.P1) < 0.003) || (D3(a, job.P1) < 0.003 && D3(b, job.P0) < 0.003);
+                    if (m && mine == null) mine = r;
+                    else if (!m) others.Add(new Dictionary<string, object> { { "poly", r.Chain }, { "dia", cfg.DiaMm / 1000.0 } });
+                }
+                string owner = mine == null ? null : mine.Name.Split('/')[0];
+                if (mine == null)
+                {
+                    sb.AppendLine("Verification: the new route could not be read back (run Scan Routes). Planned path: " + alt.Summary().Replace("\n", " "));
+                    if (cfg.SwInterference) sb.AppendLine(SwInterference(job.Model, null));
+                    Msg(sb.ToString());
+                    return;
+                }
+                var req = new Dictionary<string, object>
+                {
+                    { "cmd", "verify" }, { "poly", mine.Chain }, { "dia", job.DiaMm / 1000.0 }, { "k", job.BendMm / job.DiaMm },
+                    { "rigid", others }, { "clearance_mm", cfg.ClearanceMm }
+                };
+                busy = true;
+                Status("Smart Route: verifying the created route...");
+                engine.Send(req, r =>
+                {
+                    busy = false;
+                    try
+                    {
+                        if (!J.Ok(r)) sb.AppendLine("Verification failed: " + J.Err(r));
+                        else
+                        {
+                            var c = J.Get(r, "check") as Dictionary<string, object>;
+                            double need = J.D(J.Get(c, "radius_required"));
+                            object mr = J.Get(c, "min_radius"), mc = J.Get(c, "min_clearance");
+                            var bad = J.Objs(J.Get(c, "bend_violations"));
+                            var col = J.Objs(J.Get(c, "collisions"));
+                            var tight = J.Objs(J.Get(c, "tight"));
+                            sb.AppendLine("VERIFICATION of the created route (" + mine.Name + "):");
+                            sb.AppendLine("  length " + Mm(J.D(J.Get(c, "length"))) + " mm");
+                            sb.AppendLine("  min bend radius " + (mr == null ? "n/a" : Mm(J.D(mr)) + " mm") + " (need " + Mm(need) + ") -> " +
+                                          (bad.Count == 0 ? "OK" : bad.Count + " problem spot(s)"));
+                            sb.AppendLine("  min clearance to real geometry " + (mc == null ? "n/a" : Mm(J.D(mc)) + " mm") + " -> " +
+                                          (col.Count == 0 ? (tight.Count == 0 ? "OK" : tight.Count + " tight spot(s)") : col.Count + " COLLISION(S)"));
+                            foreach (var b in bad)
+                            {
+                                double[] at = J.P(J.Get(b, "at"));
+                                sb.AppendLine("    bend at (" + Mm(at[0]) + ", " + Mm(at[1]) + ", " + Mm(at[2]) + ") mm: radius " + Mm(J.D(J.Get(b, "radius"))) + " mm");
+                            }
+                            foreach (var b in col)
+                            {
+                                double[] at = J.P(J.Get(b, "at"));
+                                sb.AppendLine("    collision at (" + Mm(at[0]) + ", " + Mm(at[1]) + ", " + Mm(at[2]) + ") mm");
+                            }
+                        }
+                        if (cfg.SwInterference) sb.AppendLine(SwInterference(job.Model, owner));
+                    }
+                    catch (Exception ex) { sb.AppendLine("Verification error: " + ex.Message); }
+                    Msg(sb.ToString());
+                });
+            }
+            catch (Exception e)
+            {
+                Log.W("VerifyAfter: " + e);
+                Msg(sb + "Verification could not run: " + e.Message);
+            }
+        }
+
+        string SwInterference(object modelObj, string owner)
+        {
+            try
+            {
+                dynamic asm = modelObj;
+                dynamic mgr = asm.InterferenceDetectionManager;
+                if (mgr == null) return "SOLIDWORKS interference check: not available.";
+                try { mgr.TreatCoincidenceAsInterference = false; } catch { }
+                try { mgr.IncludeMultibodyPartInterferences = true; } catch { }
+                try { mgr.TreatSubAssembliesAsComponents = false; } catch { }
+                object[] arr = mgr.GetInterferences() as object[];
+                int total = arr == null ? 0 : arr.Length, mine = 0;
+                if (arr != null)
+                    foreach (object it in arr)
+                    {
+                        try
+                        {
+                            dynamic itf = it;
+                            object[] cs = itf.Components as object[];
+                            if (cs == null) continue;
+                            foreach (object c in cs)
+                            {
+                                string n = (string)((dynamic)c).Name2;
+                                if (owner == null || n.Contains(owner)) { mine++; break; }
+                            }
+                        }
+                        catch { }
+                    }
+                try { mgr.Done(); } catch { }
+                return "SOLIDWORKS interference check: " + total + " interference(s) in the assembly" +
+                       (owner == null ? "." : ", " + mine + " involving the new route.");
+            }
+            catch (Exception e)
+            {
+                Log.W("SwInterference: " + e.Message);
+                return "SOLIDWORKS interference check could not run (" + e.Message + ").";
+            }
+        }
+
+        // ------------------------------------------------------------ updates
+        public void CheckUpdates()
+        {
+            try { UpdateCheck(false); }
+            catch (Exception e) { Fail("Updates", e); }
+        }
+
+        void UpdateCheck(bool silent)
+        {
+            if (checkingUpdates) return;
+            checkingUpdates = true;
+            updateManual = !silent;
+            Status("Smart Route: checking for updates...");
+            Updater.Check((info, err) => { pendingUpdate = info; updateError = err; updateReady = true; });
+        }
+
+        void HandleUpdate()
+        {
+            cfg.LastUpdateCheck = DateTime.UtcNow.Ticks;
+            cfg.Save();
+            if (pendingUpdate != null)
+            {
+                string notes = pendingUpdate.Notes ?? "";
+                if (notes.Length > 600) notes = notes.Substring(0, 600) + "...";
+                var res = MessageBox.Show(Owner(),
+                    "Smart Route " + pendingUpdate.Version + " is available (installed: " + AppInfo.Version + ").\n\n" + notes +
+                    "\n\nDownload it now and install it automatically when SOLIDWORKS is closed?",
+                    "Smart Route update", MessageBoxButtons.YesNo, MessageBoxIcon.Information);
+                if (res == DialogResult.Yes)
+                    Updater.DownloadAndInstallOnExit(pendingUpdate, err =>
+                    {
+                        updateMsg = err == null ? "Update downloaded. It will be installed when you close SOLIDWORKS."
+                                                : "Update download failed: " + err;
+                        updateMsgReady = true;
+                    });
+            }
+            else if (updateManual)
+                Msg(updateError != null ? "Could not check for updates: " + updateError
+                                        : "You have the latest version (" + AppInfo.Version + ").");
         }
 
         // ------------------------------------------------------------ Review

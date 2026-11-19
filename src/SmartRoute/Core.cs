@@ -16,6 +16,9 @@ namespace SmartRoute
         public double CustomMm { get; set; } = 0;
         public string PythonExe { get; set; } = "python";
         public bool Watch { get; set; } = false;
+        public bool AutoUpdate { get; set; } = true;
+        public long LastUpdateCheck { get; set; } = 0;
+        public bool SwInterference { get; set; } = true;
 
         public static string Dir
         {

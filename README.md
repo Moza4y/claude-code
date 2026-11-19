@@ -1,41 +1,89 @@
-# Smart Route - SOLIDWORKS add-in (beta)
+# Smart Route for SOLIDWORKS
 
-A "Smart Route" tab appears next to the Routing commands in assemblies:
+A SOLIDWORKS add-in that plans cable routes around the **real geometry** of your assembly (not bounding boxes),
+respects the cable's minimum bend radius, shows you **alternatives in a 3D preview**, builds the one you pick as a
+real **SOLIDWORKS Routing** route, and **verifies** it afterwards. It installs like any program (GUI installer),
+stays in SOLIDWORKS, and updates itself from GitHub Releases.
 
-| Button | What it does |
+> **Status: beta.** The planning engine and the add-in logic are covered by automated tests, but the add-in has not
+> been verified against a live SOLIDWORKS session yet. Start with **Scan Routes** and report what you get (see
+> [Reporting problems](#reporting-problems)).
+
+## Features (v0.3)
+
+| Button (tab "Smart Route") | What it does |
 |---|---|
-| **Smart Auto Route** | Select the 2 end points of a route (in Edit Route), click. The engine plans a path around the REAL geometry (min bend radius, clearance, optional wanted length), adds the points to the route's 3D sketch and calls Routing's `CreateRouteThroughSketchEntities`. If that call fails, the points stay in the sketch so the normal Auto Route can be run through them. |
-| **Scan Routes** | Reads every route sub-assembly (features, 3D sketch segments) and writes `%APPDATA%\SmartRoute\scan.txt`. Run this first to check the reading works on your files. |
-| **Review Routes** | Re-plans each existing single-chain route with the others as rigid obstacles; lists the ones that can be shorter (>2 % and no bend problem). "Draw selected" puts the suggestion in as a 3D sketch for comparison. Nothing is changed automatically. |
+| **Smart Auto Route** | Select the two end points of a route (in *Edit Route*), click. Plans around the real surfaces with clearance and min bend radius, optional *wanted length*. Opens a **preview** with up to 3 alternatives: *Shortest (free angles)*, *Neat (right angles)*, *Extra clearance* — each already checked for collisions, bend radius and clearance. Nothing is created until you press **Create route**. |
+| after creating | The route is built through Routing's `CreateRouteThroughSketchEntities` (smooth/flexible or orthogonal), then **verified**: min bend radius, clearance to the real geometry, collisions, plus SOLIDWORKS' own interference detection. `Ctrl+Z` undoes the route. |
+| **Scan Routes** | Reads every route in the assembly and writes `%APPDATA%\SmartRoute\scan.txt` (diagnostics). |
+| **Review Routes** | Re-plans existing routes (others as rigid obstacles) and lists the ones that could be shorter. Nothing is changed automatically; "Draw selected" drops the suggestion in as a 3D sketch. |
 | **Accuracy** | Grid cell 20 / 10 / 5 / 2.5 / 1.5 mm or custom. Higher = slower, more exact. |
-| **Auto Watch** | ON: after the assembly changes (and 5 s of quiet) only the changed components are re-read and a review runs; you get a small list only if something better exists. |
+| **Auto Watch** | After the assembly changes, re-reads only what changed and re-reviews. |
+| **Updates** | Checks GitHub for a newer version; installs it when you close SOLIDWORKS. |
 
-Geometry is read once (and cached in `<assembly>_geom.cache`). New wires reuse it; only changed components are re-read; changing the accuracy re-processes the stored geometry.
+Geometry is read once and cached (`<assembly>_geom.cache`). New wires reuse it, only changed components are re-read,
+changing the accuracy re-processes the stored data.
 
-## Build (Visual Studio 2019/2022, workload ".NET desktop development")
-1. Open `SmartRoute.csproj`. If SOLIDWORKS is not in `C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS`, edit `<SWDir>` in the csproj.
-2. The project references these from `<SWDir>\api\redist\`: `SolidWorks.Interop.sldworks`, `swconst`, `swpublished`, `SWRoutingLib`.
-3. Build **Release | x64**. Output: `bin\Release\net48\SmartRoute.dll` and `auto_cable_route.py` next to it.
+## Install (users)
 
-## Register (once, as Administrator, SOLIDWORKS closed)
+1. Download **`SmartRoute-Setup-x.y.z.exe`** from the [Releases](../../releases) page.
+2. Run it (needs admin rights), next → next → finish. Close SOLIDWORKS if Setup asks.
+3. Start SOLIDWORKS → *Tools ▸ Add-Ins* → tick **Smart Route** (and **SOLIDWORKS Routing**). Open an assembly.
+
+Nothing else to install (the planning engine is bundled). Updates: *Smart Route ▸ Updates*, or automatically
+once a day; the new Setup runs when SOLIDWORKS is closed.
+
+## Publish it on GitHub (maintainer, one time)
+
+```powershell
+# in this folder; needs git, GitHub CLI (gh auth login), Python 64-bit, Inno Setup 6.3+, .NET SDK / Visual Studio
+.\tools\init-github.ps1 -Name smart-route     # creates a PUBLIC repo, pushes all commits and tags
+.\tools\release.ps1 -Version 0.3.0            # builds the installer and publishes the GitHub Release
 ```
-"%windir%\Microsoft.NET\Framework64\v4.0.30319\regasm.exe" /codebase "<path>\SmartRoute.dll"
+
+The repository must be **public**: installed copies look at `api.github.com/repos/<owner>/<repo>/releases/latest`
+anonymously. `tools/build.ps1` fills in `<owner>/<repo>` from your `origin` remote.
+
+### Every new version
+
+Edit code → add a section to `CHANGELOG.md` → `.\tools\release.ps1 -Version 0.4.0`.
+It stamps the version, builds, commits, tags `v0.4.0`, pushes and attaches `SmartRoute-Setup-0.4.0.exe`.
+Everyone who has Smart Route installed is offered the update.
+
+## Build from source
+
+* `tools\build.ps1` — add-in DLL (against *your* SOLIDWORKS interop DLLs in `<SWDir>\api\redist`) + engine exe + installer.
+  Build against the **oldest** SOLIDWORKS version you need; the same DLL normally loads in newer ones.
+* Tests: `pip install -r requirements-dev.txt numpy scipy && pytest tests`.
+* CI (GitHub Actions) runs the engine tests, compiles the add-in against stubs (syntax check only — the SOLIDWORKS
+  DLLs can't be on GitHub), and packages the engine exe.
+
+## Layout
+
 ```
-Unregister with the same command plus `/u`.
-
-## Engine (Python, 64-bit, in PATH)
+src/SmartRoute/   C# add-in (command tab, routing reader, preview, verification, updater)
+src/engine/       Python planning engine (grid + distance field + A*, coarse-to-fine, verification, JSON server)
+installer/        Inno Setup script (GUI installer)
+tools/            build.ps1, release.ps1, init-github.ps1, CI stubs
+tests/            pytest suite for the engine
 ```
-pip install pywin32 numpy scipy
-```
-Different Python? Put its full path in `%APPDATA%\SmartRoute\settings.json` -> `"PythonExe"`.
 
-## Start
-SOLIDWORKS -> Tools -> Add-Ins -> tick **Smart Route** (Routing add-in must be on too). Logs: `%APPDATA%\SmartRoute\smartroute.log`.
+## How it works (short)
 
-## Several SOLIDWORKS versions
-Build against the OLDEST version you use (its `api\redist`); the same DLL normally loads in newer ones. If a version complains, build once per version with `/p:SWDir="<that install>"`.
+The add-in talks to a local engine process (`SmartRouteEngine.exe --server`, JSON lines). The engine reads component
+meshes from SOLIDWORKS once, voxelises them for the chosen accuracy, searches a 3-D path (A*, coarse-to-fine for large
+regions), pulls it straight where free space allows, rounds corners with the min bend radius, and re-checks the result
+against a fine KD-tree of the real surfaces. Requests are asynchronous so SOLIDWORKS stays usable.
 
-## Notes
-* Engine calls SOLIDWORKS from a separate process while SOLIDWORKS is idle, so requests are asynchronous: SOLIDWORKS stays usable while it plans; results appear in a message box.
-* Wire diameter/bend radius for Review and for existing routes use the last values you entered in the dialog (the route's own cable properties are read only when a route segment is selected).
-* Not verified on a live SOLIDWORKS session. Likely places to adjust if something misbehaves: coordinate frame of route sketches (`RoutingReader.ToAsm`), the feature type names that mark a route (see scan.txt), and the Routing status code returned by `CreateRouteThroughSketchEntities`.
+## Limits
+
+* Resolution is the grid cell; features smaller than a cell can be missed — the verification step and SOLIDWORKS'
+  interference detection are the safety net.
+* Branched routes (harnesses) are not reviewed yet; wire diameter for Review/old routes is the last value you typed.
+* Not a replacement for engineering judgement: always check the result.
+
+## Reporting problems
+
+Attach `%APPDATA%\SmartRoute\smartroute.log` and `scan.txt` and describe what you clicked.
+
+License: MIT.
