@@ -87,3 +87,9 @@ against a fine KD-tree of the real surfaces. Requests are asynchronous so SOLIDW
 Attach `%APPDATA%\SmartRoute\smartroute.log` and `scan.txt` and describe what you clicked.
 
 License: MIT.
+
+## User guide (Arabic)
+
+`docs/user-guide/SmartRoute-UserGuide-ar.pdf` (and an editable `.docx`) — installation, every button, the preview window, accuracy,
+troubleshooting. The pictures are drawn illustrations of the tool's screens (the preview is computed by the engine on a test scene);
+replace them with real screenshots after the first run. Sources to regenerate it are in `docs/user-guide/source/`.
