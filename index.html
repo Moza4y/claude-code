@@ -1,0 +1,708 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Tasks – a clean, fast to-do list</title>
+<meta name="description" content="A clean, fast and private to-do list. Your tasks stay in your browser.">
+<meta name="theme-color" content="#f4f5fb" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0a0c12" media="(prefers-color-scheme: dark)">
+<meta property="og:title" content="Tasks – a clean, fast to-do list">
+<meta property="og:description" content="A clean, fast and private to-do list. Your tasks stay in your browser.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%234f46e5'/%3E%3Cpath d='M18 33l10 10 18-22' fill='none' stroke='white' stroke-width='6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<script>
+  /* Apply the saved / system theme before first paint (prevents a flash). */
+  (function () {
+    try {
+      var t = localStorage.getItem('tasks.theme');
+      if (t !== 'light' && t !== 'dark') t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      document.documentElement.dataset.theme = t;
+    } catch (e) { document.documentElement.dataset.theme = 'light'; }
+  })();
+</script>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f4f5fb;
+    --glow-1: rgba(99, 102, 241, .16);
+    --glow-2: rgba(236, 72, 153, .08);
+    --surface: #ffffff;
+    --surface-2: #f6f7fb;
+    --border: #e6e8f0;
+    --text: #0f172a;
+    --muted: #64748b;
+    --faint: #94a3b8;
+    --accent: #4f46e5;
+    --accent-2: #7c3aed;
+    --accent-hover: #4338ca;
+    --accent-soft: #eef0ff;
+    --accent-contrast: #ffffff;
+    --ok: #10b981;
+    --warn: #d97706;
+    --danger: #e11d48;
+    --danger-soft: #ffe4ea;
+    --warn-soft: #fff3dc;
+    --shadow-md: 0 1px 2px rgba(15, 23, 42, .04), 0 12px 32px -12px rgba(15, 23, 42, .16);
+    --radius: 18px;
+    --font: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+  }
+  [data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #090b11;
+    --glow-1: rgba(99, 102, 241, .22);
+    --glow-2: rgba(168, 85, 247, .10);
+    --surface: #131620;
+    --surface-2: #181c28;
+    --border: #252a38;
+    --text: #e9ecf5;
+    --muted: #98a2b8;
+    --faint: #6b7489;
+    --accent: #818cf8;
+    --accent-2: #a78bfa;
+    --accent-hover: #9aa3fb;
+    --accent-soft: #1c2040;
+    --accent-contrast: #0b0d17;
+    --warn: #fbbf24;
+    --danger: #fb7185;
+    --danger-soft: #3a1a24;
+    --warn-soft: #3a2d12;
+    --shadow-md: 0 1px 2px rgba(0, 0, 0, .3), 0 16px 40px -14px rgba(0, 0, 0, .6);
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    font: 16px/1.5 var(--font);
+    color: var(--text);
+    background:
+      radial-gradient(900px 480px at 8% -8%, var(--glow-1), transparent 60%),
+      radial-gradient(700px 420px at 100% 0%, var(--glow-2), transparent 55%),
+      var(--bg);
+    background-attachment: fixed;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    transition: background-color .3s, color .3s;
+  }
+  button, input, select { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); border: 0; white-space: nowrap; }
+  .skip { position: absolute; left: 12px; top: -48px; background: var(--accent); color: var(--accent-contrast); padding: 8px 14px; border-radius: 10px; z-index: 50; text-decoration: none; font-weight: 600; transition: top .15s; }
+  .skip:focus { top: 12px; }
+
+  .app { max-width: 680px; margin: 0 auto; padding: 56px 20px 96px; }
+
+  /* ---------- header ---------- */
+  .top { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 22px; }
+  .eyebrow { margin: 0 0 4px; font-size: 13px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+  h1 { margin: 0; font-size: clamp(30px, 6vw, 40px); line-height: 1.1; font-weight: 750; letter-spacing: -.03em; }
+  .icon-btn { display: inline-grid; place-items: center; width: 42px; height: 42px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface); color: var(--muted); box-shadow: var(--shadow-md); transition: color .15s, transform .15s, border-color .15s; }
+  .icon-btn:hover { color: var(--text); border-color: var(--faint); }
+  .icon-btn:active { transform: scale(.94); }
+  .icon-btn svg { width: 20px; height: 20px; }
+  .icon-btn .sun { display: none; }
+  [data-theme="dark"] .icon-btn .sun { display: block; }
+  [data-theme="dark"] .icon-btn .moon { display: none; }
+
+  /* ---------- cards ---------- */
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-md); transition: background-color .3s, border-color .3s; }
+  .card + .card { margin-top: 16px; }
+
+  /* ---------- summary ---------- */
+  .summary { padding: 20px 22px; display: grid; gap: 14px; }
+  .summary-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+  .left-count { display: flex; align-items: baseline; gap: 10px; }
+  .left-count strong { font-size: 34px; line-height: 1; font-weight: 750; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
+  .left-count span { color: var(--muted); font-weight: 500; }
+  .pct { font-weight: 650; color: var(--accent); font-variant-numeric: tabular-nums; }
+  .bar { height: 9px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border); overflow: hidden; }
+  .bar > i { display: block; height: 100%; width: 0; border-radius: inherit; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width .5s cubic-bezier(.2, .8, .2, 1); }
+  .sub { margin: 0; color: var(--muted); font-size: 14px; }
+
+  /* ---------- composer ---------- */
+  .composer { padding: 14px; }
+  .field { display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 16px; border: 1.5px solid var(--border); border-radius: 14px; background: var(--surface-2); transition: border-color .15s, box-shadow .15s, background-color .15s; }
+  .field:focus-within { border-color: var(--accent); background: var(--surface); box-shadow: 0 0 0 4px var(--accent-soft); }
+  .field input[type="text"] { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; font-size: 17px; padding: 10px 0; }
+  .field input::placeholder { color: var(--faint); }
+  .btn-primary { display: inline-flex; align-items: center; gap: 8px; border: 0; border-radius: 10px; padding: 11px 18px; font-weight: 650; color: var(--accent-contrast); background: linear-gradient(135deg, var(--accent), var(--accent-2)); box-shadow: 0 6px 16px -6px rgba(79, 70, 229, .6); box-shadow: 0 6px 16px -6px color-mix(in srgb, var(--accent) 70%, transparent); transition: transform .15s, filter .15s, box-shadow .15s; }
+  .btn-primary:hover { filter: brightness(1.07); }
+  .btn-primary:active { transform: scale(.97); }
+  .btn-primary svg { width: 18px; height: 18px; }
+  .shake { animation: shake .35s; }
+  @keyframes shake { 20%, 60% { transform: translateX(-5px); } 40%, 80% { transform: translateX(5px); } }
+
+  .options { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding: 12px 4px 2px; }
+  .opt { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); font-weight: 500; }
+  .seg { display: inline-flex; padding: 3px; gap: 2px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border); }
+  .seg label { position: relative; }
+  .seg input { position: absolute; inset: 0; opacity: 0; cursor: pointer; margin: 0; }
+  .seg span { display: block; padding: 5px 11px; border-radius: 7px; font-size: 13px; font-weight: 600; color: var(--muted); transition: background-color .15s, color .15s; }
+  .seg input:checked + span { background: var(--surface); color: var(--text); box-shadow: 0 1px 3px rgba(15, 23, 42, .14); }
+  .seg input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .date-input { border: 1px solid var(--border); background: var(--surface-2); border-radius: 10px; padding: 5px 10px; font-size: 13px; font-weight: 500; color: var(--text); }
+  .date-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  /* ---------- list card ---------- */
+  .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+  .tabs { display: inline-flex; padding: 4px; gap: 2px; border-radius: 12px; background: var(--surface-2); border: 1px solid var(--border); }
+  .tab { display: inline-flex; align-items: center; gap: 7px; border: 0; background: transparent; padding: 7px 12px; border-radius: 9px; font-size: 14px; font-weight: 600; color: var(--muted); transition: background-color .15s, color .15s; }
+  .tab:hover { color: var(--text); }
+  .tab[aria-selected="true"] { background: var(--surface); color: var(--text); box-shadow: 0 1px 3px rgba(15, 23, 42, .14); }
+  .tab .n { min-width: 20px; padding: 0 6px; border-radius: 999px; background: var(--border); color: var(--muted); font-size: 12px; line-height: 20px; text-align: center; font-variant-numeric: tabular-nums; }
+  .tab[aria-selected="true"] .n { background: var(--accent-soft); color: var(--accent); }
+  .sort { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); font-weight: 500; }
+  .sort select { appearance: none; -webkit-appearance: none; border: 1px solid var(--border); background: var(--surface-2) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E") no-repeat right 9px center; padding: 6px 28px 6px 10px; border-radius: 10px; font-size: 13px; font-weight: 600; color: var(--text); }
+
+  .tasks { list-style: none; margin: 0; padding: 0; }
+  .task { display: grid; grid-template-columns: 24px 1fr auto; gap: 14px; align-items: start; padding: 15px 18px; border-bottom: 1px solid var(--border); position: relative; transition: background-color .15s, opacity .2s; }
+  .task:last-child { border-bottom: 0; }
+  .task:hover { background: var(--surface-2); background: color-mix(in srgb, var(--surface-2) 70%, transparent); }
+  .task.enter { animation: pop .32s cubic-bezier(.2, .8, .2, 1); }
+  .task.leaving { opacity: 0; transform: translateX(14px); transition: opacity .18s, transform .18s; }
+  @keyframes pop { from { opacity: 0; transform: translateY(-8px) scale(.985); } to { opacity: 1; transform: none; } }
+
+  .check { position: relative; display: grid; place-items: center; width: 24px; height: 24px; margin-top: 1px; cursor: pointer; }
+  .check input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; margin: 0; cursor: pointer; }
+  .box { width: 22px; height: 22px; border-radius: 7px; border: 2px solid var(--faint); display: grid; place-items: center; transition: background-color .18s, border-color .18s, transform .18s; }
+  .check:hover .box { border-color: var(--accent); }
+  .check input:focus-visible + .box { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .box svg { width: 14px; height: 14px; }
+  .box path { fill: none; stroke: #fff; stroke-width: 3.2; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 24; stroke-dashoffset: 24; transition: stroke-dashoffset .28s ease .05s; }
+  [data-theme="dark"] .box path { stroke: #0b0d17; }
+  .check input:checked + .box { background: var(--accent); border-color: var(--accent); transform: scale(1.04); }
+  .check input:checked + .box path { stroke-dashoffset: 0; }
+
+  .body { min-width: 0; }
+  .title { margin: 0; font-size: 16.5px; font-weight: 550; line-height: 1.4; overflow-wrap: anywhere; cursor: text; transition: color .2s; }
+  .task.done .title { color: var(--faint); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--faint) 80%, transparent); }
+  .meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+  .meta:empty { display: none; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; line-height: 20px; background: var(--surface-2); border: 1px solid var(--border); color: var(--muted); }
+  .chip svg { width: 12px; height: 12px; }
+  .chip .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+  .pri-high .dot { background: var(--danger); }
+  .pri-medium .dot { background: #f59e0b; }
+  .pri-low .dot { background: var(--ok); }
+  .due.today { background: var(--warn-soft); border-color: transparent; color: var(--warn); }
+  .due.overdue { background: var(--danger-soft); border-color: transparent; color: var(--danger); }
+  .task.done .chip { opacity: .6; }
+
+  .actions { display: flex; gap: 2px; opacity: 0; transition: opacity .15s; }
+  .task:hover .actions, .task:focus-within .actions { opacity: 1; }
+  @media (hover: none) { .actions { opacity: 1; } }
+  .act { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 9px; border: 0; background: transparent; color: var(--faint); transition: background-color .15s, color .15s; }
+  .act:hover { background: var(--surface-2); color: var(--text); }
+  .act.del:hover { background: var(--danger-soft); color: var(--danger); }
+  .act svg { width: 17px; height: 17px; }
+
+  .edit-input { width: 100%; font-size: 16.5px; font-weight: 550; padding: 6px 10px; margin: -6px 0 0 -10px; border-radius: 9px; border: 1.5px solid var(--accent); background: var(--surface); box-shadow: 0 0 0 4px var(--accent-soft); outline: 0; }
+  .task.editing .title { display: none; }
+
+  .empty { display: grid; justify-items: center; text-align: center; gap: 6px; padding: 44px 24px 46px; }
+  .empty svg { width: 132px; height: auto; margin-bottom: 8px; }
+  .empty h2 { margin: 0; font-size: 18px; font-weight: 700; letter-spacing: -.01em; }
+  .empty p { margin: 0; color: var(--muted); max-width: 32ch; }
+  [hidden] { display: none !important; }
+
+  .foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 18px; border-top: 1px solid var(--border); font-size: 13px; color: var(--muted); }
+  .link-btn { border: 0; background: none; padding: 4px 8px; margin: -4px -8px; border-radius: 8px; font-size: 13px; font-weight: 600; color: var(--muted); transition: color .15s, background-color .15s; }
+  .link-btn:hover:not(:disabled) { color: var(--danger); background: var(--danger-soft); }
+  .link-btn:disabled { opacity: .45; cursor: default; }
+
+  .hint { margin: 22px 4px 0; text-align: center; font-size: 13px; color: var(--faint); }
+  kbd { font: 600 12px/1 var(--font); padding: 3px 6px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--muted); box-shadow: 0 1px 0 var(--border); }
+
+  /* ---------- toast ---------- */
+  .toast { position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom)); transform: translate(-50%, 24px); opacity: 0; pointer-events: none; display: flex; align-items: center; gap: 14px; padding: 11px 12px 11px 18px; border-radius: 14px; background: var(--text); color: var(--bg); font-size: 14px; font-weight: 550; box-shadow: 0 16px 40px -12px rgba(0, 0, 0, .45); transition: opacity .2s, transform .25s cubic-bezier(.2, .8, .2, 1); z-index: 40; max-width: calc(100vw - 32px); }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
+  .toast button { border: 0; border-radius: 9px; padding: 6px 12px; font-weight: 700; font-size: 13px; background: rgba(128, 128, 128, .35); background: color-mix(in srgb, var(--bg) 18%, transparent); color: var(--bg); }
+  .toast button:hover { background: rgba(128, 128, 128, .5); background: color-mix(in srgb, var(--bg) 30%, transparent); }
+
+  @media (max-width: 520px) {
+    .app { padding: 32px 14px 88px; }
+    .summary { padding: 16px 18px; }
+    .btn-primary .label { display: none; }
+    .btn-primary { padding: 11px 13px; }
+    .toolbar { padding: 12px; }
+    .task { padding: 14px; gap: 12px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
+  }
+</style>
+</head>
+<body>
+<a class="skip" href="#new-task">Skip to add task</a>
+
+<main class="app">
+  <header class="top">
+    <div>
+      <p class="eyebrow" id="today">Today</p>
+      <h1>My Tasks</h1>
+    </div>
+    <button class="icon-btn" id="theme" type="button" aria-label="Switch colour theme" title="Switch theme">
+      <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z"/></svg>
+      <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+    </button>
+  </header>
+
+  <section class="card summary" aria-label="Progress">
+    <div class="summary-row">
+      <div class="left-count"><strong id="left">0</strong><span id="left-label">tasks left</span></div>
+      <span class="pct" id="pct">0%</span>
+    </div>
+    <div class="bar" role="progressbar" aria-label="Completed tasks" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="bar"><i></i></div>
+    <p class="sub" id="sub" aria-live="polite">Nothing here yet</p>
+  </section>
+
+  <form class="card composer" id="composer" autocomplete="off">
+    <div class="field">
+      <label class="sr-only" for="new-task">New task</label>
+      <input type="text" id="new-task" placeholder="What needs to be done?" maxlength="200" enterkeyhint="done">
+      <button class="btn-primary" type="submit" aria-label="Add task">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+        <span class="label">Add task</span>
+      </button>
+    </div>
+    <div class="options">
+      <div class="opt" role="radiogroup" aria-label="Priority">
+        <span>Priority</span>
+        <div class="seg">
+          <label><input type="radio" name="priority" value="low"><span>Low</span></label>
+          <label><input type="radio" name="priority" value="medium" checked><span>Medium</span></label>
+          <label><input type="radio" name="priority" value="high"><span>High</span></label>
+        </div>
+      </div>
+      <label class="opt">Due <input class="date-input" type="date" id="due" aria-label="Due date"></label>
+    </div>
+  </form>
+
+  <section class="card list-card" aria-label="Task list">
+    <div class="toolbar">
+      <div class="tabs" role="tablist" aria-label="Filter tasks" id="tabs">
+        <button class="tab" role="tab" data-filter="all" type="button">All <span class="n" data-n="all">0</span></button>
+        <button class="tab" role="tab" data-filter="active" type="button">Active <span class="n" data-n="active">0</span></button>
+        <button class="tab" role="tab" data-filter="completed" type="button">Done <span class="n" data-n="completed">0</span></button>
+      </div>
+      <label class="sort">Sort
+        <select id="sort" aria-label="Sort tasks">
+          <option value="newest">Newest first</option>
+          <option value="oldest">Oldest first</option>
+          <option value="due">Due date</option>
+          <option value="priority">Priority</option>
+        </select>
+      </label>
+    </div>
+
+    <ul class="tasks" id="list"></ul>
+
+    <div class="empty" id="empty" hidden>
+      <svg viewBox="0 0 160 120" fill="none" aria-hidden="true">
+        <ellipse cx="80" cy="108" rx="52" ry="7" fill="currentColor" opacity=".07"/>
+        <rect x="38" y="14" width="84" height="88" rx="14" fill="var(--surface)" stroke="var(--border)" stroke-width="2"/>
+        <rect x="52" y="34" width="14" height="14" rx="4.5" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="2"/>
+        <path d="M55 41l3 3 5-6" stroke="var(--accent)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+        <rect x="74" y="36" width="34" height="5" rx="2.5" fill="var(--border)"/>
+        <rect x="52" y="58" width="14" height="14" rx="4.5" stroke="var(--faint)" stroke-width="2" opacity=".7"/>
+        <rect x="74" y="60" width="26" height="5" rx="2.5" fill="var(--border)"/>
+        <rect x="52" y="82" width="14" height="10" rx="4.5" stroke="var(--faint)" stroke-width="2" opacity=".4"/>
+        <rect x="74" y="84" width="30" height="5" rx="2.5" fill="var(--border)" opacity=".6"/>
+        <circle cx="128" cy="26" r="5" fill="var(--accent-2)" opacity=".35"/>
+        <circle cx="26" cy="70" r="3.5" fill="var(--accent)" opacity=".3"/>
+      </svg>
+      <h2 id="empty-title">No tasks yet</h2>
+      <p id="empty-text">Add your first task above to get started.</p>
+    </div>
+
+    <div class="foot">
+      <span id="foot-count" aria-live="polite">0 items left</span>
+      <button class="link-btn" type="button" id="clear" disabled>Clear completed</button>
+    </div>
+  </section>
+
+  <p class="hint">Press <kbd>/</kbd> to add a task &nbsp;·&nbsp; double-click a task to edit it &nbsp;·&nbsp; saved automatically in your browser</p>
+</main>
+
+<div class="toast" id="toast" role="status" aria-live="polite"><span class="msg"></span><button type="button" hidden>Undo</button></div>
+
+<script>
+(() => {
+  'use strict';
+
+  /* ---- settings ------------------------------------------------------- */
+  const SEED_SAMPLE_TASKS = true;     // show a few example tasks on the very first visit
+  const MAX_LENGTH = 200;
+  const KEY = 'tasks.v1';
+  const THEME_KEY = 'tasks.theme';
+
+  /* ---- helpers --------------------------------------------------------- */
+  const $ = (sel, root = document) => root.querySelector(sel);
+  const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+  const pad = n => String(n).padStart(2, '0');
+  const uid = () => (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+  const reduceMotion = () => window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const dateStr = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const todayStr = () => dateStr(new Date());
+  const addDays = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return dateStr(d); };
+  const parseDate = s => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
+  const fmtDay = new Intl.DateTimeFormat(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+  const fmtShort = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' });
+  const fmtLong = new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+
+  const PRIORITY = { high: { label: 'High', rank: 1 }, medium: { label: 'Medium', rank: 2 }, low: { label: 'Low', rank: 3 } };
+
+  const ICON = {
+    cal: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M8 3v4M16 3v4M3 10h18"/></svg>'
+  };
+
+  const ITEM_HTML =
+    '<label class="check"><input type="checkbox" class="cb"><span class="box"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span></label>' +
+    '<div class="body"><p class="title"></p><div class="meta"></div></div>' +
+    '<div class="actions">' +
+      '<button class="act edit" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/></svg></button>' +
+      '<button class="act del" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4a1 1 0 011-1h6a1 1 0 011 1v2M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6M10 11v6M14 11v6"/></svg></button>' +
+    '</div>';
+
+  /* ---- state ----------------------------------------------------------- */
+  let tasks = [];
+  let filter = 'all';
+  let sort = 'newest';
+  let priority = 'medium';
+  let editingId = null;
+  let lastRemoved = null;
+  let firstRender = true;
+  let toastTimer = null;
+
+  const els = {
+    list: $('#list'), empty: $('#empty'), emptyTitle: $('#empty-title'), emptyText: $('#empty-text'),
+    left: $('#left'), leftLabel: $('#left-label'), pct: $('#pct'), bar: $('#bar'), sub: $('#sub'),
+    form: $('#composer'), input: $('#new-task'), due: $('#due'), tabs: $('#tabs'), sort: $('#sort'),
+    footCount: $('#foot-count'), clear: $('#clear'), toast: $('#toast'), theme: $('#theme'), today: $('#today')
+  };
+
+  /* ---- persistence ------------------------------------------------------ */
+  const isTask = t => t && typeof t === 'object' && typeof t.id === 'string' && typeof t.text === 'string';
+  const normalize = t => ({
+    id: t.id, text: t.text.slice(0, MAX_LENGTH), done: !!t.done,
+    priority: PRIORITY[t.priority] ? t.priority : 'medium',
+    due: /^\d{4}-\d{2}-\d{2}$/.test(t.due || '') ? t.due : null,
+    created: Number(t.created) || Date.now(), completedAt: t.completedAt ? Number(t.completedAt) : null
+  });
+
+  function load() {
+    let raw = null;
+    try { raw = localStorage.getItem(KEY); } catch (e) { /* storage unavailable */ }
+    if (raw === null) {
+      tasks = SEED_SAMPLE_TASKS ? sampleTasks() : [];
+      return;
+    }
+    try {
+      const d = JSON.parse(raw);
+      tasks = Array.isArray(d.tasks) ? d.tasks.filter(isTask).map(normalize) : [];
+      if (['all', 'active', 'completed'].includes(d.filter)) filter = d.filter;
+      if (['newest', 'oldest', 'due', 'priority'].includes(d.sort)) sort = d.sort;
+    } catch (e) { tasks = []; }
+  }
+
+  function save() {
+    try { localStorage.setItem(KEY, JSON.stringify({ v: 1, tasks, filter, sort })); } catch (e) { /* ignore */ }
+  }
+
+  function sampleTasks() {
+    const now = Date.now();
+    return [
+      { id: uid(), text: 'Plan the week ahead', done: false, priority: 'high', due: todayStr(), created: now - 1000, completedAt: null },
+      { id: uid(), text: 'Reply to important emails', done: false, priority: 'medium', due: addDays(1), created: now - 2000, completedAt: null },
+      { id: uid(), text: 'Tick me off, double-click to edit, or add your own task above', done: false, priority: 'low', due: null, created: now - 3000, completedAt: null },
+      { id: uid(), text: 'Try out your new to-do list', done: true, priority: 'low', due: null, created: now - 4000, completedAt: now - 500 }
+    ].map(normalize);
+  }
+
+  /* ---- task operations -------------------------------------------------- */
+  const find = id => tasks.find(t => t.id === id);
+
+  function commit() { save(); render(); }
+
+  function addTask(text, pri, due) {
+    tasks.unshift({ id: uid(), text: text.slice(0, MAX_LENGTH), done: false, priority: pri, due: due || null, created: Date.now(), completedAt: null });
+    if (filter === 'completed') filter = 'all';
+    commit();
+  }
+
+  function toggle(id, done) {
+    const t = find(id); if (!t) return;
+    t.done = done; t.completedAt = done ? Date.now() : null;
+    commit();
+  }
+
+  function removeTask(id) {
+    const i = tasks.findIndex(t => t.id === id); if (i < 0) return;
+    const [task] = tasks.splice(i, 1);
+    lastRemoved = [{ task, index: i }];
+    save();
+    const li = itemEl(id);
+    if (li && !reduceMotion()) { li.classList.add('leaving'); setTimeout(render, 190); } else render();
+    showToast('Task deleted', undo);
+  }
+
+  function clearCompleted() {
+    const removed = [];
+    tasks.forEach((task, index) => { if (task.done) removed.push({ task, index }); });
+    if (!removed.length) return;
+    tasks = tasks.filter(t => !t.done);
+    lastRemoved = removed;
+    commit();
+    showToast(removed.length === 1 ? '1 completed task cleared' : `${removed.length} completed tasks cleared`, undo);
+  }
+
+  function undo() {
+    if (!lastRemoved) return;
+    lastRemoved.slice().sort((a, b) => a.index - b.index).forEach(({ task, index }) => tasks.splice(Math.min(index, tasks.length), 0, task));
+    lastRemoved = null;
+    hideToast();
+    commit();
+  }
+
+  /* ---- derived data ----------------------------------------------------- */
+  function visibleTasks() {
+    const rank = t => PRIORITY[t.priority].rank;
+    const dueKey = t => t.due ? parseDate(t.due).getTime() : Infinity;
+    const by = {
+      newest: (a, b) => b.created - a.created,
+      oldest: (a, b) => a.created - b.created,
+      due: (a, b) => (dueKey(a) - dueKey(b)) || (b.created - a.created),
+      priority: (a, b) => (rank(a) - rank(b)) || (b.created - a.created)
+    }[sort];
+    return tasks
+      .filter(t => filter === 'all' || (filter === 'active' ? !t.done : t.done))
+      .sort((a, b) => (a.done - b.done) || by(a, b));
+  }
+
+  function dueInfo(t) {
+    const today = todayStr();
+    if (t.done) return { cls: '', text: fmtShort.format(parseDate(t.due)) };
+    if (t.due < today) return { cls: 'overdue', text: 'Overdue · ' + fmtShort.format(parseDate(t.due)) };
+    if (t.due === today) return { cls: 'today', text: 'Today' };
+    if (t.due === addDays(1)) return { cls: '', text: 'Tomorrow' };
+    return { cls: '', text: fmtDay.format(parseDate(t.due)) };
+  }
+
+  /* ---- rendering -------------------------------------------------------- */
+  function itemEl(id) { return $$('.task', els.list).find(li => li.dataset.id === id) || null; }
+
+  function createItem(t) {
+    const li = document.createElement('li');
+    li.className = 'task';
+    li.dataset.id = t.id;
+    li.innerHTML = ITEM_HTML;            // static markup only; user text is added via textContent
+    return li;
+  }
+
+  function updateItem(li, t) {
+    li.classList.toggle('done', t.done);
+    const cb = $('.cb', li);
+    cb.checked = t.done;
+    cb.setAttribute('aria-label', (t.done ? 'Mark as not done: ' : 'Mark as done: ') + t.text);
+    if (editingId !== t.id) $('.title', li).textContent = t.text;
+    $('.edit', li).setAttribute('aria-label', 'Edit task: ' + t.text);
+    $('.del', li).setAttribute('aria-label', 'Delete task: ' + t.text);
+
+    const meta = $('.meta', li);
+    meta.textContent = '';
+    const p = document.createElement('span');
+    p.className = 'chip pri pri-' + t.priority;
+    const dot = document.createElement('i'); dot.className = 'dot';
+    p.append(dot, document.createTextNode(PRIORITY[t.priority].label));
+    meta.append(p);
+    if (t.due) {
+      const info = dueInfo(t);
+      const c = document.createElement('span');
+      c.className = 'chip due' + (info.cls ? ' ' + info.cls : '');
+      c.innerHTML = ICON.cal;            // static icon
+      c.append(document.createTextNode(info.text));
+      meta.append(c);
+    }
+  }
+
+  function render() {
+    // summary
+    const total = tasks.length, done = tasks.filter(t => t.done).length, left = total - done;
+    const pct = total ? Math.round(done / total * 100) : 0;
+    els.left.textContent = left;
+    els.leftLabel.textContent = left === 1 ? 'task left' : 'tasks left';
+    els.pct.textContent = pct + '%';
+    $('i', els.bar).style.width = pct + '%';
+    els.bar.setAttribute('aria-valuenow', pct);
+    els.sub.textContent = !total ? 'Nothing here yet' : left === 0 ? 'All caught up. Nice work!' : `${done} of ${total} completed`;
+
+    // tabs
+    const counts = { all: total, active: left, completed: done };
+    $$('.tab', els.tabs).forEach(b => {
+      const on = b.dataset.filter === filter;
+      b.setAttribute('aria-selected', on);
+      b.tabIndex = on ? 0 : -1;
+      $('.n', b).textContent = counts[b.dataset.filter];
+    });
+    els.sort.value = sort;
+
+    // list (keyed update so existing rows keep their state and don't re-animate)
+    const vis = visibleTasks();
+    const existing = new Map($$('.task', els.list).map(li => [li.dataset.id, li]));
+    vis.forEach((t, i) => {
+      let li = existing.get(t.id);
+      if (li) existing.delete(t.id);
+      else {
+        li = createItem(t);
+        if (!firstRender && !reduceMotion()) {
+          li.classList.add('enter');
+          li.addEventListener('animationend', () => li.classList.remove('enter'), { once: true });
+        }
+      }
+      updateItem(li, t);
+      if (els.list.children[i] !== li) els.list.insertBefore(li, els.list.children[i] || null);
+    });
+    existing.forEach(li => li.remove());
+    firstRender = false;
+
+    // empty state
+    els.empty.hidden = vis.length > 0;
+    if (!vis.length) {
+      const msg = !total ? ['No tasks yet', 'Add your first task above to get started.']
+        : filter === 'active' ? ['Nothing left to do', 'You are all caught up. Enjoy the free time!']
+        : ['No completed tasks', 'Finish a task and it will show up here.'];
+      els.emptyTitle.textContent = msg[0];
+      els.emptyText.textContent = msg[1];
+    }
+
+    // footer
+    els.footCount.textContent = left === 1 ? '1 item left' : `${left} items left`;
+    els.clear.disabled = done === 0;
+  }
+
+  /* ---- inline editing --------------------------------------------------- */
+  function startEdit(id) {
+    if (editingId) finishEdit(true);
+    const li = itemEl(id), t = find(id);
+    if (!li || !t) return;
+    editingId = id;
+    li.classList.add('editing');
+    const input = document.createElement('input');
+    input.type = 'text'; input.className = 'edit-input'; input.value = t.text; input.maxLength = MAX_LENGTH;
+    input.setAttribute('aria-label', 'Edit task text');
+    $('.body', li).prepend(input);
+    input.focus(); input.select();
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); finishEdit(true); }
+      else if (e.key === 'Escape') { e.preventDefault(); finishEdit(false); }
+    });
+    input.addEventListener('blur', () => finishEdit(true));
+  }
+
+  function finishEdit(saveIt) {
+    if (!editingId) return;
+    const id = editingId;
+    editingId = null;
+    const li = itemEl(id);
+    if (!li) return;
+    const input = $('.edit-input', li);
+    const val = input ? input.value.trim() : '';
+    li.classList.remove('editing');
+    if (input) input.remove();
+    const t = find(id);
+    if (saveIt && val && t && t.text !== val) { t.text = val; commit(); } else render();
+    const btn = $('.edit', li); if (btn && document.activeElement === document.body) btn.focus({ preventScroll: true });
+  }
+
+  /* ---- toast ------------------------------------------------------------ */
+  function showToast(message, onUndo) {
+    $('.msg', els.toast).textContent = message;
+    const b = $('button', els.toast);
+    b.hidden = !onUndo;
+    b.onclick = () => { if (onUndo) onUndo(); };
+    els.toast.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(hideToast, 6000);
+  }
+  function hideToast() { els.toast.classList.remove('show'); clearTimeout(toastTimer); }
+
+  /* ---- theme ------------------------------------------------------------ */
+  function setTheme(t, persist) {
+    document.documentElement.dataset.theme = t;
+    if (persist) { try { localStorage.setItem(THEME_KEY, t); } catch (e) { /* ignore */ } }
+  }
+  els.theme.addEventListener('click', () => {
+    setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark', true);
+  });
+  if (window.matchMedia) {
+    matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
+      let saved = null; try { saved = localStorage.getItem(THEME_KEY); } catch (err) { /* ignore */ }
+      if (!saved) setTheme(e.matches ? 'dark' : 'light', false);   // follow the system until the user chooses
+    });
+  }
+
+  /* ---- events ----------------------------------------------------------- */
+  els.form.addEventListener('submit', e => {
+    e.preventDefault();
+    const text = els.input.value.trim();
+    if (!text) {
+      els.input.parentElement.classList.remove('shake'); void els.input.parentElement.offsetWidth;
+      els.input.parentElement.classList.add('shake');
+      els.input.focus();
+      return;
+    }
+    addTask(text, priority, els.due.value || null);
+    els.input.value = '';
+    els.due.value = '';
+    els.input.focus();
+  });
+
+  $$('input[name="priority"]', els.form).forEach(r => r.addEventListener('change', () => { if (r.checked) priority = r.value; }));
+
+  els.tabs.addEventListener('click', e => {
+    const b = e.target.closest('.tab'); if (!b) return;
+    filter = b.dataset.filter; save(); render();
+  });
+  els.tabs.addEventListener('keydown', e => {
+    if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+    const tabs = $$('.tab', els.tabs);
+    const i = tabs.findIndex(b => b.dataset.filter === filter);
+    const next = tabs[(i + (e.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length];
+    filter = next.dataset.filter; save(); render(); next.focus();
+  });
+
+  els.sort.addEventListener('change', () => { sort = els.sort.value; save(); render(); });
+  els.clear.addEventListener('click', clearCompleted);
+
+  els.list.addEventListener('change', e => {
+    if (e.target.matches('.cb')) toggle(e.target.closest('.task').dataset.id, e.target.checked);
+  });
+  els.list.addEventListener('click', e => {
+    const btn = e.target.closest('.act'); if (!btn) return;
+    const id = btn.closest('.task').dataset.id;
+    if (btn.classList.contains('del')) removeTask(id); else startEdit(id);
+  });
+  els.list.addEventListener('dblclick', e => {
+    const title = e.target.closest('.title'); if (title) startEdit(title.closest('.task').dataset.id);
+  });
+
+  document.addEventListener('keydown', e => {
+    const tag = (e.target.tagName || '').toLowerCase();
+    const typing = tag === 'input' || tag === 'textarea' || tag === 'select' || e.target.isContentEditable;
+    if (e.key === '/' && !typing && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); els.input.focus(); }
+    else if (e.key === 'z' && (e.ctrlKey || e.metaKey) && !typing && lastRemoved) { e.preventDefault(); undo(); }
+  });
+
+  window.addEventListener('storage', e => { if (e.key === KEY) { load(); render(); } });   // keep other tabs in sync
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { els.today.textContent = fmtLong.format(new Date()); render(); } });
+
+  /* ---- start ------------------------------------------------------------ */
+  els.today.textContent = fmtLong.format(new Date());
+  load();
+  render();
+})();
+</script>
+</body>
+</html>
