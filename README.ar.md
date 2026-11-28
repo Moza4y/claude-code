@@ -10,12 +10,13 @@
 
 بعد كده بتفضل في البرنامج. للتحديث: زر **Updates** أو تلقائيًا كل يوم، والتحديث بيتسطّب لما تقفل سوليد ووركس.
 
-## رفع المشروع على GitHub (مرة واحدة)
+## المستودع والإصدارات
+المشروع على **https://github.com/Moza4y/claude-code** (لازم يفضل Public عشان التحديث التلقائي يقرا الإصدارات).
+أول إصدار:
 ```powershell
-.\tools\init-github.ps1 -Name smart-route      # بيعمل Repo عام ويرفع كل الـ commits والـ tags
-.\tools\release.ps1 -Version 0.3.0             # بيبني المُثبّت وينشر Release
+git clone https://github.com/Moza4y/claude-code.git ; cd claude-code
+.\tools\release.ps1 -Version 0.3.0      # بيبني المُثبّت، وينشئ Tag، ويرفع، وينشر Release فيه Setup.exe
 ```
-لازم الـ Repo يكون **Public** عشان التحديث التلقائي يقدر يقرا الإصدارات.
 
 ## كل إصدار جديد
 عدّل الكود، ضيف قسم في `CHANGELOG.md`، وشغّل: `.\tools\release.ps1 -Version 0.4.0`.

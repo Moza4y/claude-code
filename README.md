@@ -33,16 +33,17 @@ changing the accuracy re-processes the stored data.
 Nothing else to install (the planning engine is bundled). Updates: *Smart Route ▸ Updates*, or automatically
 once a day; the new Setup runs when SOLIDWORKS is closed.
 
-## Publish it on GitHub (maintainer, one time)
+## Repository and releases (maintainer)
+
+This project lives at **https://github.com/Moza4y/claude-code** (public — installed copies read the latest release from there, anonymously, to find updates).
+`tools/build.ps1` fills in `<owner>/<repo>` from your `origin` remote, so build from a clone of that repository.
+
+First release (needs git, GitHub CLI `gh auth login`, Python 64-bit, Inno Setup 6.3+, .NET SDK / Visual Studio):
 
 ```powershell
-# in this folder; needs git, GitHub CLI (gh auth login), Python 64-bit, Inno Setup 6.3+, .NET SDK / Visual Studio
-.\tools\init-github.ps1 -Name smart-route     # creates a PUBLIC repo, pushes all commits and tags
-.\tools\release.ps1 -Version 0.3.0            # builds the installer and publishes the GitHub Release
+git clone https://github.com/Moza4y/claude-code.git ; cd claude-code
+.\tools\release.ps1 -Version 0.3.0      # builds the installer, tags v0.3.0, pushes, publishes the GitHub Release with Setup.exe
 ```
-
-The repository must be **public**: installed copies look at `api.github.com/repos/<owner>/<repo>/releases/latest`
-anonymously. `tools/build.ps1` fills in `<owner>/<repo>` from your `origin` remote.
 
 ### Every new version
 
